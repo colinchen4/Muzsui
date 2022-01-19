@@ -6,7 +6,7 @@ export const TokenCircle = (props: { iconSize?: number , iconFile?: string, styl
   return (
     <span
       style={{
-        background: 'rgba(255, 255, 255, 0.05)',
+        background: 'rgba(0, 47, 167, 0.05)',
         borderRadius: '50%',
         height: iconSize,
         width: iconSize,
