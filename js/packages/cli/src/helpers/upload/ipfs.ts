@@ -2,6 +2,7 @@ import log from 'loglevel';
 import fetch from 'node-fetch';
 import { create, globSource } from 'ipfs-http-client';
 import path from 'path';
+import { setImageUrlManifest } from './file-uri';
 
 export interface ipfsCreds {
   projectId: string;
@@ -29,7 +30,9 @@ export async function ipfsUpload(
   };
 
   async function uploadMedia(media) {
-    const mediaHash = await uploadToIpfs(globSource(media, { recursive: true }));
+    const mediaHash = await uploadToIpfs(
+      globSource(media, { recursive: true }),
+    );
     log.debug('mediaHash:', mediaHash);
     const mediaUrl = `https://ipfs.io/ipfs/${mediaHash}`;
     log.info('mediaUrl:', mediaUrl);
@@ -43,20 +46,20 @@ export async function ipfsUpload(
     return mediaUrl;
   }
 
-  const imageUrl = `${await uploadMedia(image)}?ext=${path.extname(image).replace('.', '')}`;
-  const animationUrl = animation ? `${await uploadMedia(animation)}?ext=${path.extname(animation).replace('.', '')}` : undefined;
-  const manifestJson = JSON.parse(manifestBuffer.toString('utf8'));
-  manifestJson.image = imageUrl;
-  if (animation) {
-    manifestJson.animation_url = animationUrl;
-  }
-  manifestJson.properties.files = manifestJson.properties.files.map(f => {
-    if (f.type.startsWith('image/')) {
-      return { ...f, uri: imageUrl };
-    } else {
-      return { ...f, uri: animationUrl };
-    }
-  });
+  const imageUrl = `${await uploadMedia(image)}?ext=${path
+    .extname(image)
+    .replace('.', '')}`;
+  const animationUrl = animation
+    ? `${await uploadMedia(animation)}?ext=${path
+        .extname(animation)
+        .replace('.', '')}`
+    : undefined;
+
+  const manifestJson = await setImageUrlManifest(
+    manifestBuffer.toString('utf8'),
+    imageUrl,
+    animationUrl,
+  );
 
   const manifestHash = await uploadToIpfs(
     Buffer.from(JSON.stringify(manifestJson)),

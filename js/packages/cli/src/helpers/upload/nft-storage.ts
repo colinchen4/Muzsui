@@ -1,77 +1,77 @@
 import log from 'loglevel';
-import fetch from 'node-fetch';
 import fs from 'fs';
 import path from 'path';
+import { NFTStorageMetaplexor } from '@nftstorage/metaplex-auth';
+import { NFTStorage, Blob } from 'nft.storage';
+import { Keypair } from '@solana/web3.js';
+import { setImageUrlManifest } from './file-uri';
 
 export async function nftStorageUpload(
-  nftStorageKey: string,
   image: string,
   animation: string,
   manifestBuffer: Buffer,
+  walletKeyPair: Keypair,
+  env: string,
+  nftStorageKey: string | null,
 ) {
+  // If we have an API token, use the default NFTStorage client.
+  // Otherwise, use NFTStorageMetaplexor, which uses a signature
+  // from the wallet key to authenticate.
+  // See https://github.com/nftstorage/metaplex-auth for details.
+  const client = nftStorageKey
+    ? new NFTStorage({ token: nftStorageKey })
+    : NFTStorageMetaplexor.withSecretKey(walletKeyPair.secretKey, {
+        solanaCluster: env,
+        mintingAgent: 'metaplex/candy-machine-v2-cli',
+      });
 
   async function uploadMedia(media) {
-    const stats = fs.statSync(media);
-    const readStream = fs.createReadStream(media);
-    log.info(`Media Upload ${media}`);
-    return fetch('https://api.nft.storage/upload', {
-      method: 'POST',
-      headers: {
-        'Content-length': stats.size,
-        Authorization: `Bearer ${nftStorageKey}`,
-      },
-      body: readStream, // Here, stringContent or bufferContent would also work
-    })
-      .then(response => response.json())
-      .then(mediaUploadResponse => {
-        const mediaURL = `https://${mediaUploadResponse.value.cid}.ipfs.dweb.link`;
-        return mediaURL;
-      })
-      .catch(error => {
-        log.debug(error);
-        throw new Error(`Media Upload Error: ${error}`);
-      });
-  }
-
-  // Copied from ipfsUpload
-  const imageUrl = `${await uploadMedia(image)}?ext=${path.extname(image).replace('.', '')}`;
-  const animationUrl = animation ? `${await uploadMedia(animation)}?ext=${path.extname(animation).replace('.', '')}` : undefined;
-  const manifestJson = JSON.parse(manifestBuffer.toString('utf8'));
-  manifestJson.image = imageUrl;
-  if (animation) {
-    manifestJson.animation_url = animationUrl;
-  }
-  manifestJson.properties.files = manifestJson.properties.files.map(f => {
-    if (f.type.startsWith('image/')) {
-      return { ...f, uri: imageUrl };
-    } else {
-      return { ...f, uri: animationUrl };
+    try {
+      const readStream = fs.createReadStream(media);
+      log.info(`Media Upload ${media}`);
+      // @ts-ignore - the Blob type expects a web ReadableStream, but also works with node Streams.
+      const cid = await client.storeBlob({ stream: () => readStream });
+      return `https://${cid}.ipfs.nftstorage.link`;
+    } catch (err) {
+      log.debug(err);
+      throw new Error(`Media upload error: ${err}`);
     }
-  });
+  }
 
-  log.info('Upload metadata');
-  const metaData = Buffer.from(JSON.stringify(manifestJson));
-  return fetch('https://api.nft.storage/upload', {
-    method: 'POST',
-    headers: {
-      'Content-length': metaData.byteLength,
-      Authorization: `Bearer ${nftStorageKey}`,
-    },
-    body: metaData, // Here, stringContent or bufferContent would also work
-  })
-    .then(response => response.json())
-    .then(metaUploadResponse => {
-      const link = `https://${metaUploadResponse.value.cid}.ipfs.dweb.link`;
-      log.info('Upload End');
-      if (animation) {
+  async function uploadMetadata(manifestJson, imageUrl, animationUrl) {
+    try {
+      log.info('Upload metadata');
+      const metaData = Buffer.from(JSON.stringify(manifestJson));
+      const cid = await client.storeBlob(new Blob([metaData]));
+      const link = `https://${cid}.ipfs.nftstorage.link`;
+      log.info('Upload end');
+      if (animationUrl) {
         log.debug([link, imageUrl, animationUrl]);
       } else {
         log.debug([link, imageUrl]);
       }
       return [link, imageUrl, animationUrl];
-    })
-    .catch(error => {
-      log.debug(error);
-      throw new Error(`Metadata Upload Error: ${error}`);
-    });
+    } catch (err) {
+      log.debug(err);
+      throw new Error(`Metadata upload error: ${err}`);
+    }
+  }
+
+  // Copied from ipfsUpload
+  const imageUrl = `${await uploadMedia(image)}?ext=${path
+    .extname(image)
+    .replace('.', '')}`;
+  const animationUrl = animation
+    ? `${await uploadMedia(animation)}?ext=${path
+        .extname(animation)
+        .replace('.', '')}`
+    : undefined;
+
+  const manifestJson = await setImageUrlManifest(
+    manifestBuffer.toString('utf8'),
+    imageUrl,
+    animationUrl,
+  );
+
+  return uploadMetadata(manifestJson, imageUrl, animationUrl);
 }
